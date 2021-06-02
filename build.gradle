@@ -1,0 +1,36 @@
+plugins {
+  id 'java-library'
+  // To create a shadow/fat jar, including dependencies
+  id 'com.github.johnrengelman.shadow' version '7.0.0'
+  // To strict included native libraries
+  id 'org.bytedeco.gradle-javacpp-platform' version '1.5.5'
+}
+
+repositories {
+  mavenLocal()
+  mavenCentral()
+}
+
+ext.moduleName = 'qupath.extension.tensorflow'
+
+description = 'qupath-tensorflow'
+
+dependencies {
+    def tensorflowVersion = "0.3.1"
+    def platform = project.findProperty("platform")
+    
+    if (platform) {
+        implementation "org.tensorflow:tensorflow-core-platform-${platform}:${tensorflowVersion}"
+    } else {
+        implementation "org.tensorflow:tensorflow-core-platform:${tensorflowVersion}"
+    }
+    shadow "io.github.qupath:qupath-gui-fx:0.3.0-SNAPSHOT"
+    
+    shadow "org.slf4j:slf4j-api:1.7.25"
+}
+
+// Copy dependencies
+task copyDependencies(type: Copy) {
+  from configurations.default
+  into 'build/libs'
+}
