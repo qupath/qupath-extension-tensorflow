@@ -30,10 +30,12 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.LongStream;
 
+import org.bytedeco.javacpp.PointerScope;
 import org.bytedeco.opencv.global.opencv_core;
 import org.bytedeco.opencv.opencv_core.Mat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.tensorflow.ConcreteFunction;
 import org.tensorflow.SavedModelBundle;
 import org.tensorflow.Session.Runner;
 import org.tensorflow.Tensor;
@@ -136,13 +138,49 @@ public class TensorFlowOp extends PaddedOp {
 		if (exception != null)
 			throw new RuntimeException(exception);
 
-		String inputName = bundle.getInput().getName();
-		String outputName2 = this.outputName == null ? bundle.getOutput().getName() : this.outputName;
+		boolean doEager = true;
+		
+		try (@SuppressWarnings("unchecked")
+		var scope = new PointerScope()) {
+			Mat output;
+			if (doEager) {
+				var function = bundle.bundle.function(bundle.signatureDefKey);
+				var signature = function.signature();
+				String inputName = signature.inputNames().iterator().next();
+				String outputName = signature.outputNames().iterator().next();
+				
+				if (tileWidth > 0 && tileHeight > 0)
+					output = OpenCVTools.applyTiled(m -> run(function, m, inputName, outputName), input, tileWidth, tileHeight, opencv_core.BORDER_REFLECT);
+				else
+					output = run(function, input, inputName, outputName);
+			} else {
+				String inputName = bundle.getInput().getName();
+				String outputName2 = this.outputName == null ? bundle.getOutput().getName() : this.outputName;
 
-		if (tileWidth > 0 && tileHeight > 0)
-			return OpenCVTools.applyTiled(m -> run(bundle.bundle.session().runner(), m, inputName, outputName2), input, tileWidth, tileHeight, opencv_core.BORDER_REFLECT);
-		else
-			return run(bundle.bundle.session().runner(), input, inputName, outputName2);
+				if (tileWidth > 0 && tileHeight > 0)
+					output = OpenCVTools.applyTiled(m -> run(bundle.bundle.session().runner(), m, inputName, outputName2), input, tileWidth, tileHeight, opencv_core.BORDER_REFLECT);
+				else
+					output = run(bundle.bundle.session().runner(), input, inputName, outputName2);
+			}
+			input.put(output);
+			scope.deallocate();
+		}
+		return input;
+	}
+	
+	private static Mat run(ConcreteFunction function, Mat mat, String inputName, String outputName) {
+		
+		var tensor = TensorFlowTools.convertToTensor(mat);
+		var outputMap = function.call(Map.of(inputName, tensor));
+		var outputTensor = outputMap.get(outputName);
+		
+		var output = TensorFlowTools.convertToMat(outputTensor);
+				
+		for (var val : outputMap.values())
+			val.close();
+		tensor.close();
+
+		return output;
 	}
 
 
@@ -219,6 +257,8 @@ public class TensorFlowOp extends PaddedOp {
 
     	private String pathModel;
         private SavedModelBundle bundle;
+        
+        private String signatureDefKey;
 
         private List<SimpleTensorInfo> inputs;
         private List<SimpleTensorInfo> outputs;
@@ -241,11 +281,12 @@ public class TensorFlowOp extends PaddedOp {
     		bundle = SavedModelBundle.load(pathModel, "serve");
 
     		metaGraphDef = bundle.metaGraphDef();
-			
+    		
     		for (var entry : metaGraphDef.getSignatureDefMap().entrySet()) {
     			var sigdef = entry.getValue();
     			if (inputs == null || inputs.isEmpty()) {
     				logger.info("Found SignatureDef: {} (method={})", entry.getKey(), sigdef.getMethodName());
+    				signatureDefKey = entry.getKey();
     				inputs = sigdef.getInputsMap().values().stream().map(t -> new SimpleTensorInfo(t)).collect(Collectors.toList());
     				outputs = sigdef.getOutputsMap().values().stream().map(t -> new SimpleTensorInfo(t)).collect(Collectors.toList());
     			} else {
