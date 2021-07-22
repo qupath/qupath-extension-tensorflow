@@ -19,6 +19,14 @@ repositories {
   
 }
 
+/*
+ * Optionally use OpenCV with CUDA.
+ * See https://github.com/bytedeco/javacpp-presets/tree/master/cuda for info (and licenses).
+ */
+def useCudaRedist = project.hasProperty('cuda-redist')
+def useCuda = useCudaRedist || project.hasProperty('cuda')
+
+
 ext.moduleName = 'qupath.extension.tensorflow'
 
 description = 'QuPath extension to use TensorFlow'
@@ -26,7 +34,10 @@ description = 'QuPath extension to use TensorFlow'
 version = "0.3.0-SNAPSHOT"
 
 dependencies {
-    def tensorflowVersion = "0.3.1"
+    def tensorflowVersion = "0.3.2"
+    def cudaVersion = "11.0-8.0-1.5.4" // Warning! This doesn't match version with QuPath v0.3.0 + opencv-platform-gpu
+    def qupathVersion = "0.3.0-SNAPSHOT" // For now
+    
     def platform = project.findProperty("platform")
     
     if (platform) {
@@ -34,7 +45,15 @@ dependencies {
     } else {
         implementation "org.tensorflow:tensorflow-core-platform:${tensorflowVersion}"
     }
-    shadow "io.github.qupath:qupath-gui-fx:0.3.0-SNAPSHOT"
+    
+    if (useCuda) {
+    	implementation "org.bytedeco:cuda-platform:${cudaVersion}"
+    	if (useCudaRedist) {
+	    	implementation "org.bytedeco:cuda-platform-redist:${cudaVersion}"
+	    }
+    }
+    
+    shadow "io.github.qupath:qupath-gui-fx:${qupathVersion}"
     shadow "org.slf4j:slf4j-api:1.7.30"
 }
 
@@ -50,4 +69,36 @@ tasks.register("copyDependencies", Copy) {
     
     from configurations.default
     into 'build/libs'
+}
+
+/*
+ * Ensure Java 11 compatibility
+ */
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(11)
+    }
+    if (project.properties['sources'])
+	    withSourcesJar()
+    if (project.properties['javadocs'])
+	    withJavadocJar()
+}
+
+/*
+ * Create javadocs for all modules/packages in one place.
+ * Use -PstrictJavadoc=true to fail on error with doclint (which is rather strict).
+ */
+def strictJavadoc = findProperty('strictJavadoc')
+if (!strictJavadoc) {
+    tasks.withType(Javadoc) {
+        options.addStringOption('Xdoclint:none', '-quiet')
+    }
+}
+    
+/*
+ * Avoid 'Entry .gitkeep is a duplicate but no duplicate handling strategy has been set.'
+ * when using withSourcesJar()
+ */
+tasks.withType(org.gradle.jvm.tasks.Jar) {
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
 }
