@@ -42,6 +42,7 @@ import java.util.stream.Collectors;
 
 import org.bytedeco.javacpp.PointerScope;
 import org.bytedeco.javacpp.indexer.FloatIndexer;
+import org.bytedeco.opencv.global.opencv_core;
 import org.bytedeco.opencv.opencv_core.Mat;
 import org.locationtech.jts.algorithm.Centroid;
 import org.locationtech.jts.algorithm.locate.SimplePointInAreaLocator;
@@ -127,11 +128,15 @@ public class StarDist2D {
 		private int tileHeight = 1024;
 		
 		private Function<ROI, PathObject> creatorFun;
-		private PathClass pathClass;
+		
+		private PathClass globalPathClass;
+		private Map<Integer, PathClass> classifications;
 		
 		private boolean measureShape = false;
 		private Collection<Compartments> compartments = Arrays.asList(Compartments.values());
 		private Collection<Measurements> measurements;
+		
+		private boolean keepClassifiedBackground = false;
 		
 		private boolean constrainToParent = true;
 		
@@ -276,13 +281,54 @@ public class StarDist2D {
 		}
 		
 		/**
+		 * Specify a mapping between StarDist predicted classifications (if available) and QuPath classifications.
+		 * 
+		 * @param classifications
+		 * @return this builder
+		 * 
+		 * @see #classify(PathClass)
+		 */
+		public Builder classifications(Map<Integer, PathClass> classifications) {
+			this.classifications = new HashMap<>(classifications);
+			return this;
+		}
+
+		/**
+		 * Specify a mapping between StarDist predicted classifications (if available) and QuPath classification names.
+		 * This is a convenience method that creates {@link PathClass} objects from Strings, then passes them to {@link #classifications(Map)}.
+		 * 
+		 * @param classifications
+		 * @return this builder
+		 */
+		public Builder classificationNames(Map<Integer, String> classifications) {
+			return classifications(classifications.entrySet().stream().collect(Collectors.toMap(e -> e.getKey(), e -> PathClassFactory.getPathClass(e.getValue()))));
+		}
+		
+		/**
+		 * When using {@link #classifications(Map)}, optionally keep objects classified as background (i.e. 0).
+		 * The default is to remove such objects immediately, before resolving overlaps.
+		 * @param keep
+		 * @return this builder
+		 */
+		public Builder keepClassifiedBackground(boolean keep) {
+			this.keepClassifiedBackground = keep;
+			return this;
+		}
+
+		/**
 		 * Request that a classification is applied to all created objects.
+		 * Note that if a StarDist model supporting classifications is used and {@link #classifications(Map)} is specified, 
+		 * the StarDist prediction will take precedence. The classification specified here will be applied only to objects 
+		 * that have not already been classified based upon the prediction and mapping.
 		 * 
 		 * @param pathClass
 		 * @return this builder
+		 * 
+		 * @see #classifications(Map)
+		 * @see #classificationNames(Map)
 		 */
 		public Builder classify(PathClass pathClass) {
-			this.pathClass = pathClass;
+			this.globalPathClass = pathClass;
 			return this;
 		}
 		
@@ -292,6 +338,8 @@ public class StarDist2D {
 		 * 
 		 * @param pathClassName
 		 * @return this builder
+		 * @see #classifications(Map)
+		 * @see #classificationNames(Map)
 		 */
 		public Builder classify(String pathClassName) {
 			return classify(PathClassFactory.getPathClass(pathClassName, (Integer)null));
@@ -552,7 +600,9 @@ public class StarDist2D {
 			stardist.nThreads = nThreads;
 			stardist.constrainToParent = constrainToParent;
 			stardist.creatorFun = creatorFun;
-			stardist.pathClass = pathClass;
+			stardist.globalPathClass = globalPathClass;
+			stardist.classifications = classifications;
+			stardist.keepClassifiedBackground = keepClassifiedBackground;
 			
 			stardist.compartments = new LinkedHashSet<>(compartments);
 			
@@ -579,7 +629,9 @@ public class StarDist2D {
 	private boolean ignoreCellOverlaps;
 	
 	private Function<ROI, PathObject> creatorFun;
-	private PathClass pathClass;
+	private PathClass globalPathClass;
+	private Map<Integer, PathClass> classifications;
+	private boolean keepClassifiedBackground = false;
 	
 	private boolean constrainToParent = true;
 	
@@ -872,7 +924,15 @@ public class StarDist2D {
         		ml.putMeasurement("Detection probability", nucleus.getProbability());
         	}
         }
-		if (pathClass != null)
+		
+		// Set classification, if available
+		PathClass pathClass;
+		if (classifications == null)
+			pathClass = globalPathClass;
+		else
+			pathClass = classifications.getOrDefault(nucleus.getClassification(), globalPathClass);
+		
+		if (pathClass != null && pathClass.isValid())
 			pathObject.setPathClass(pathClass);
 		return pathObject;
 	}
@@ -889,6 +949,37 @@ public class StarDist2D {
 	}
 	
 	
+	private static int[] range(int startInclusive, int endExclusive) {
+		int n = endExclusive - startInclusive;
+		int[] output = new int[n];
+		for (int i = 0; i < n; i++)
+			output[i] = startInclusive + i;
+		return output;
+	}
+	
+	
+	private static Mat extractChannels(Mat mat, int... channels) {
+		Mat output;
+		int n = channels.length;
+		if (n == 0) {
+			output = new Mat();			
+		} else if (n == 1) {
+			output = new Mat();
+			opencv_core.extractChannel(mat, output, channels[0]);
+		} else {
+			int[] pairs = new int[n * 2];
+			for (int i = 0; i < n; i++) {
+				pairs[i*2] = channels[i];
+				pairs[i*2+1] = i;
+			}
+			output = new Mat(mat.rows(), mat.cols(), opencv_core.CV_MAKE_TYPE(mat.depth(), n));
+			opencv_core.mixChannels(mat, 1, output, 1, pairs, n);
+		}
+		return output;
+	}
+	
+	
+	
 	private List<PotentialNucleus> detectObjectsForTile(ImageDataOp op, ImageData<BufferedImage> imageData, RegionRequest request, boolean excludeOnBounds, Geometry mask) {
 
 		List<PotentialNucleus> nuclei;
@@ -903,8 +994,33 @@ public class StarDist2D {
 				return Collections.emptyList();
 			}
 			
-			FloatIndexer indexer = mat.createIndexer();
-			nuclei = createNuclei(indexer, request, mask);
+//			OpenCVTools.matToImagePlus(mat, "Prediction " + request).show();
+			
+			// Split channels to extract probability, ray and (possibly) classification images
+			int nChannels = mat.channels();
+			int nClassifications = classifications == null ? 0 : classifications.size();
+			int nRays = nChannels - 1 - nClassifications;
+			Mat matProb = extractChannels(mat, 0);
+			Mat matRays = extractChannels(mat, range(1, nRays+1));
+			Mat matClassifications = nClassifications == 0 ? null : extractChannels(mat, range(nRays+1, nChannels));
+			
+			// Depending upon model export, we might have a half resolution prediction that needs to be rescaled
+			long inputWidth = Math.round(request.getWidth() / request.getDownsample());
+			long inputHeight = Math.round(request.getHeight() / request.getDownsample());
+			double scaleX = Math.round(inputWidth / mat.cols());
+			double scaleY = Math.round(inputHeight / mat.rows());
+			if (scaleX != 1.0 || scaleY != 1.0) {
+				if (scaleX != 2.0 || scaleY != 2.0)
+					logger.warn("Unexpected StarDist rescaling x={}, y={}", scaleX, scaleY);
+				else
+					logger.debug("StarDist rescaling x={}, y={}", scaleX, scaleY);
+			}
+			
+			// Convert predictions to potential nuclei
+			FloatIndexer indexerProb = matProb.createIndexer();
+			FloatIndexer indexerRays = matRays.createIndexer();
+			FloatIndexer indexerClassifications = matClassifications == null ? null : matClassifications.createIndexer();
+			nuclei = createNuclei(indexerProb, indexerRays, indexerClassifications, request, scaleX, scaleY, mask);
 			
 			// Exclude anything that overlaps the right/bottom boundary of a region
 			if (excludeOnBounds) {
@@ -945,16 +1061,29 @@ public class StarDist2D {
 	}
 	
 	
-	
-	private List<PotentialNucleus> createNuclei(FloatIndexer indexer, RegionRequest request, Geometry mask) {
-	    long[] sizes = indexer.sizes();
+	/**
+	 * Create a potential nucleus.
+	 * @param indexerProb probability values
+	 * @param indexerRays ray values
+	 * @param indexerClass classification probabilities (optional)
+	 * @param request region request, used to convert coordinates
+	 * @param scaleX scaling to apply to x pixel index; normally 1.0, but may be 2.0 if passing downsampled output
+	 * @param scaleY scaling to apply to y pixel index; normally 1.0, but may be 2.0 if passing downsampled output
+	 * @param mask optional geometry mask, in the full image space
+	 * @return list of potential nuclei, sorted in descending order of probability
+	 */
+	private List<PotentialNucleus> createNuclei(FloatIndexer indexerProb, FloatIndexer indexerRays, FloatIndexer indexerClass, RegionRequest request, double scaleX, double scaleY, Geometry mask) {
+	    long[] sizes = indexerProb.sizes();
 	    long[] inds = new long[3];
 	    int h = (int)sizes[0];
 	    int w = (int)sizes[1];
-	    int nRays = (int)sizes[2] - 1;
+	    
+	    int nRays = (int)indexerRays.size(2);
 	    double[][] rays = sinCosAngles(nRays);
 	    double[] raySine = rays[0];
 	    double[] rayCosine = rays[1];
+	    
+	    int nClasses = indexerClass == null ? 0 : (int)indexerClass.size(2);
 
 	    var nuclei = new ArrayList<PotentialNucleus>();
 	    
@@ -968,19 +1097,22 @@ public class StarDist2D {
 	        for (int x = 0; x < w; x++) {
 	            inds[1] = x;
 	            inds[2] = 0;
-	            double prob = indexer.get(inds);
+	            double prob = indexerProb.get(inds);
 	            if (prob < threshold)
 	                continue;
 	            var coords = new ArrayList<Coordinate>();
 	            Coordinate lastCoord = null;
-	            for (int a = 1; a <= nRays; a++) {
+	            for (int a = 0; a < nRays; a++) {
 	                inds[2] = a;
-	                double val = indexer.get(inds);
+	                double val = indexerRays.get(inds);
 	                // We can get NaN
 	                if (!Double.isFinite(val))
 	                	continue;
-	                double xx = precisionModel.makePrecise(request.getX() + (x + val * rayCosine[a-1]) * downsample);
-	                double yy = precisionModel.makePrecise(request.getY() + (y + val * raySine[a-1]) * downsample);
+	                // Python implementation imposes a minimum value
+	                val = Math.max(1e-3, val);
+	                // Create coordinate & add if it is distinct
+	                double xx = precisionModel.makePrecise(request.getX() + (x * scaleX + val * rayCosine[a]) * downsample);
+	                double yy = precisionModel.makePrecise(request.getY() + (y * scaleY + val * raySine[a]) * downsample);
 	                var coord = new Coordinate(xx, yy);
 	                if (!Objects.equals(coord, lastCoord))
 	                	coords.add(coord);
@@ -994,7 +1126,21 @@ public class StarDist2D {
 		            var polygon = factory.createPolygon(coords.toArray(Coordinate[]::new));
 		            if (locator == null || locator.locate(new Centroid(polygon).getCentroid()) != Location.EXTERIOR) {
 		            	var geom = simplify(polygon);
-		            	nuclei.add(new PotentialNucleus(geom, prob));
+		            	// Get classification, if available
+		            	int classification = -1;
+		            	if (indexerClass != null) {
+		            		double maxProb = Double.NEGATIVE_INFINITY;
+			            	for (int c = 0; c < nClasses; c++) {
+			            		inds[2] = c;
+			            		double probClass = indexerClass.get(inds);
+			            		if (probClass > maxProb) {
+				            		classification = c;
+				            		maxProb = probClass;
+			            		}
+			            	}
+		            	}
+		            	if (classification != 0 || keepClassifiedBackground)
+		            		nuclei.add(new PotentialNucleus(geom, prob, classification));
 		            }
 	            } catch (Exception e) {
 	            	logger.warn("Error creating nucleus: " + e.getLocalizedMessage(), e);
@@ -1028,6 +1174,7 @@ public class StarDist2D {
 	    for (var nucleus : potentialNuclei) {
 	        if (skippedNucleus.contains(nucleus))
 	            continue;
+	        
 	        nuclei.add(nucleus);
         	var envelope = envelopes.get(nucleus);
         	
@@ -1082,16 +1229,22 @@ public class StarDist2D {
 		private Geometry geometry;
 	    private double fullArea;
 	    private double probability;
+	    private int classification;
 
-	    PotentialNucleus(Geometry geom, double prob) {
+	    PotentialNucleus(Geometry geom, double prob, int classification) {
 	        this.geometry = geom;
 	        this.probability = prob;
+	        this.classification = classification;
 	        this.fullArea = geom.getArea();
 	    }
 
 	    double getProbability() {
 	        return probability;
 	    };
+	    
+	    int getClassification() {
+	    	return classification;
+	    }
 		
 	}
 	
