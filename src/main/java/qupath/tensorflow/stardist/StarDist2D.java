@@ -77,7 +77,7 @@ import qupath.lib.regions.Padding;
 import qupath.lib.regions.RegionRequest;
 import qupath.lib.roi.GeometryTools;
 import qupath.lib.roi.interfaces.ROI;
-import qupath.opencv.ml.OpenCVDNN;
+import qupath.opencv.ml.DnnTools;
 import qupath.opencv.ops.ImageDataOp;
 import qupath.opencv.ops.ImageOp;
 import qupath.opencv.ops.ImageOps;
@@ -557,9 +557,10 @@ public class StarDist2D {
 				}
 				if (file.isFile()) {
 					try {
-						var dnn = new OpenCVDNN.Builder(modelPath)
-								.build();
-						mlOp = ImageOps.ML.dnn(dnn, tileWidth, tileHeight, padding);
+						var dnn = DnnTools.builder(modelPath)
+								.build()
+								.buildFunction();
+						mlOp = ImageOps.ML.fun(dnn, tileWidth, tileHeight, padding);
 						logger.debug("Loaded model {} with OpenCV DNN", modelPath);
 					} catch (Exception e) {
 						logger.error("Unable to load model file with OpenCV. If you intended to use TensorFlow, you need to have it on the classpath & provide the "
