@@ -77,7 +77,7 @@ import qupath.lib.regions.Padding;
 import qupath.lib.regions.RegionRequest;
 import qupath.lib.roi.GeometryTools;
 import qupath.lib.roi.interfaces.ROI;
-import qupath.opencv.ml.OpenCVDNN;
+import qupath.opencv.dnn.OpenCVDNN;
 import qupath.opencv.ops.ImageDataOp;
 import qupath.opencv.ops.ImageOp;
 import qupath.opencv.ops.ImageOps;
@@ -557,7 +557,7 @@ public class StarDist2D {
 				}
 				if (file.isFile()) {
 					try {
-						var dnn = new OpenCVDNN.Builder(modelPath)
+						var dnn = new OpenCVDNN.Builder(file.toURI())
 								.build();
 						mlOp = ImageOps.ML.dnn(dnn, tileWidth, tileHeight, padding);
 						logger.debug("Loaded model {} with OpenCV DNN", modelPath);
