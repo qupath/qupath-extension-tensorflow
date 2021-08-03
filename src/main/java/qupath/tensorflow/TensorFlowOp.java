@@ -163,7 +163,7 @@ public class TensorFlowOp extends PaddedOp {
 					output = run(bundle.bundle.session().runner(), input, inputName, outputName2);
 			}
 			input.put(output);
-			scope.deallocate();
+//			scope.deallocate();
 		}
 		return input;
 	}
