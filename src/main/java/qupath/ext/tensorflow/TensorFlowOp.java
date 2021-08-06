@@ -19,7 +19,7 @@
  * #L%
  */
 
-package qupath.tensorflow;
+package qupath.ext.tensorflow;
 
 import java.util.ArrayList;
 import java.util.List;

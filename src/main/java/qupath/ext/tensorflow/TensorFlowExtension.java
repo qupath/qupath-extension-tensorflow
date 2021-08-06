@@ -19,7 +19,7 @@
  * #L%
  */
 
-package qupath.tensorflow;
+package qupath.ext.tensorflow;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

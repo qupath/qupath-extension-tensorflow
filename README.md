@@ -7,8 +7,10 @@ using [TensorFlow for Java](http://github.com/tensorflow/java).
 
 It is intended for the (at the time of writing) not-yet-released QuPath v0.3, 
 and remains in a not-quite-complete state.
-Its main use is in running [StarDist](https://qupath.readthedocs.io/en/0.2/docs/advanced/stardist.html) 
-nucleus identification.
+
+Its previous main use was to run [StarDist](https://qupath.readthedocs.io/en/0.2/docs/advanced/stardist.html) 
+nucleus identification, although the new [QuPath StarDist extension](https://github.com/qupath/qupath-extension-stardist) does not require that TensorFlow is available.
+
 
 ## Building
 
@@ -55,7 +57,7 @@ The platforms available at the time of writing are `mkl`, `gpu`, `mkl-gpu`.
 ## Installing
 
 The extension + its dependencies will all need to be available to QuPath inside 
-Qupath's extensions folder.
+QuPath's extensions folder.
 
 The easiest way to install the jars is to simply drag them on top of QuPath 
 when it's running.

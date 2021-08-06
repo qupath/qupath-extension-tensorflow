@@ -19,7 +19,7 @@
  * #L%
  */
 
-package qupath.tensorflow;
+package qupath.ext.tensorflow;
 
 import java.io.File;
 import java.net.URI;

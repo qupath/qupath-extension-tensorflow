@@ -30,6 +30,7 @@ import org.bytedeco.opencv.opencv_core.Mat;
 import org.bytedeco.opencv.opencv_core.Scalar;
 import org.junit.jupiter.api.Test;
 
+import qupath.ext.tensorflow.TensorFlowTools;
 import qupath.opencv.tools.OpenCVTools;
 
 @SuppressWarnings("javadoc")
