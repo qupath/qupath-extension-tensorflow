@@ -25,7 +25,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import qupath.lib.gui.QuPathGUI;
+import qupath.lib.gui.extensions.GitHubProject;
 import qupath.lib.gui.extensions.QuPathExtension;
+import qupath.opencv.dnn.DnnTools;
 import qupath.opencv.ops.ImageOps;
 
 /**
@@ -33,7 +35,7 @@ import qupath.opencv.ops.ImageOps;
  * 
  * @author Pete Bankhead
  */
-public class TensorFlowExtension implements QuPathExtension {
+public class TensorFlowExtension implements QuPathExtension, GitHubProject {
 	
 	private final static Logger logger = LoggerFactory.getLogger(TensorFlowExtension.class);
 
@@ -41,6 +43,7 @@ public class TensorFlowExtension implements QuPathExtension {
 	public void installExtension(QuPathGUI qupath) {
 		logger.debug("Installing TensorFlow extension");
 		ImageOps.registerOp(TensorFlowOp.class, "op.ml.ext.tensorflow");
+		DnnTools.registerDnnModel(TensorFlowDnnModel.class, TensorFlowDnnModel.class.getSimpleName());
 	}
 
 	@Override
@@ -51,6 +54,11 @@ public class TensorFlowExtension implements QuPathExtension {
 	@Override
 	public String getDescription() {
 		return "Add TensorFlow support to QuPath";
+	}
+
+	@Override
+	public GitHubRepo getRepository() {
+		return GitHubRepo.create(getName(), "qupath", "qupath-extension-tensorflow");
 	}
 	
 	

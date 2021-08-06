@@ -22,11 +22,17 @@
 package qupath.tensorflow;
 
 import java.io.File;
+import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.nio.DoubleBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Stream;
 
 import org.bytedeco.opencv.global.opencv_core;
 import org.bytedeco.opencv.opencv_core.Mat;
@@ -34,15 +40,22 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.tensorflow.Tensor;
 import org.tensorflow.TensorFlow;
+import org.tensorflow.ndarray.FloatNdArray;
+import org.tensorflow.ndarray.NdArrays;
 import org.tensorflow.ndarray.Shape;
 import org.tensorflow.ndarray.buffer.DataBuffers;
+import org.tensorflow.ndarray.buffer.FloatDataBuffer;
+import org.tensorflow.ndarray.index.Index;
+import org.tensorflow.ndarray.index.Indices;
 import org.tensorflow.types.TFloat32;
 import org.tensorflow.types.TFloat64;
 import org.tensorflow.types.TInt32;
 import org.tensorflow.types.TUint8;
-
+import qupath.lib.common.GeneralTools;
 import qupath.lib.regions.Padding;
+import qupath.opencv.dnn.DnnModel;
 import qupath.opencv.ops.ImageOp;
+import qupath.opencv.tools.OpenCVTools;
 
 /**
  * Helper methods for working with TensorFlow and QuPath, with the help of OpenCV.
@@ -59,7 +72,7 @@ public class TensorFlowTools {
 
 
 	/**
-	 * Convert a {@link Mat} to a {@link Tensor}.
+	 * Convert a single {@link Mat} to a {@link Tensor}.
 	 * <p>
 	 * This supports only a subset of Mats according to type, namely
 	 * <ul>
@@ -71,11 +84,14 @@ public class TensorFlowTools {
 	 * 
 	 * The input is assumed to be a 'standard' image (rows, columns, channels); output will have 1 pre-pended as a batch.
 	 * This behavior may change in the future!
+	 * <p>
 	 *
 	 * @param mat the input {@link Mat}
 	 * @return the converted {@link Tensor}
 	 * 
 	 * @throws IllegalArgumentException if the depth is not supported
+	 * @implNote the batch size of the output tensor is 1.
+	 * @see #convertToTensorFloat32(Mat...)
 	 */
 	public static <T> Tensor convertToTensor(Mat mat) throws IllegalArgumentException {
 	    int w = mat.cols();
@@ -83,8 +99,7 @@ public class TensorFlowTools {
 	    int nBands = mat.channels();
 	    var shape = Shape.of(1, h, w, nBands);
 	    
-	    if (!mat.isContinuous())
-	    	logger.warn("Converting non-continuous Mat to Tensor!");
+	    mat = OpenCVTools.ensureContinuous(mat, false);
 	    
 	    int depth = mat.depth();
 	    if (depth == opencv_core.CV_32F) {
@@ -105,6 +120,62 @@ public class TensorFlowTools {
 	    }
 	    throw new IllegalArgumentException("Unsupported Mat depth! Must be 8U, 32S, 32F or 64F.");
 	}
+	
+	
+	/**
+	 * Convert one or more Mats to a single 32-bit float tensor.
+	 * @param mats
+	 * @return
+	 * @throws IllegalArgumentException
+	 */
+	public static TFloat32 convertToTensorFloat32(Mat... mats) throws IllegalArgumentException {
+		
+		if (mats.length == 0)
+			throw new IllegalArgumentException("No Mats supplied to convertToTensor!");
+				
+		// Get dimensions
+		// Here, we use NHWC (*not* the conventional OpenCV/QuPath ordering!)
+		long[] shape = new long[] {mats.length, -1, -1, -1};
+		for (var mat : mats) {
+			if (shape[1] == -1) {
+				shape[1] = mat.rows();
+				shape[2] = mat.cols();
+				shape[3] = mat.channels();
+			} else if (shape[1] != mat.rows() || shape[2] != mat.cols() || shape[3] != mat.channels()) {
+				logger.error("Incompatible shapes {} and {} found!", Arrays.toString(shape), Arrays.toString(mat.createIndexer().sizes()));
+				throw new IllegalArgumentException("Mats provided to convertToTensor have incompatible shapes!");
+			}
+		}
+
+		// Create an NdArray to store the data
+		var data = NdArrays.ofFloats(Shape.of(shape));
+    	
+		long ind = 0;
+		Index[] inds = Stream.of(shape).map(s -> Indices.all()).toArray(Index[]::new);
+	    for (var mat : mats) {
+	    	
+	    	inds[0] = Indices.at(ind);
+	    	var slice = data.slice(inds);
+	    	
+	    	var buffer = DataBuffers.of(getFloatBuffer(mat));
+	    	slice.write(buffer);
+	    		    	
+	    	ind++;
+	    }
+		
+		return TFloat32.tensorOf(data);
+	}
+	
+	
+	private static FloatBuffer getFloatBuffer(Mat mat) {
+		var buffer = mat.createBuffer();
+		if (buffer instanceof FloatBuffer)
+			return (FloatBuffer)buffer;
+		var mat2 = new Mat();
+		mat.convertTo(mat2, opencv_core.CV_32F);
+		return mat2.createBuffer();
+	}
+	
 
 	/**
 	 * Convert a {@link Tensor} to a {@link Mat}.
@@ -112,13 +183,15 @@ public class TensorFlowTools {
 	 * <ul>
 	 *   <li>both input and output must be 32-bit floating point</li>
 	 *   <li>the output is expected to be a 'standard' image (rows, columns, channels)</li>
+	 *   <li>it <b>only</b> handles a batch size of 1, and the batch (first) dimension is dropped</li>
 	 * </ul>
 	 * This method may be replaced by something more customizable in the future. 
 	 * 
 	 * @param tensor
 	 * @return
 	 */
-	public static Mat convertToMat(Tensor tensor) {
+	@Deprecated
+	static Mat convertToMat(Tensor tensor) {
 		long[] shape = tensor.shape().asArray();
 	    // Get the shape, stripping off the batch
 	    int n = shape.length;
@@ -225,6 +298,54 @@ public class TensorFlowTools {
 	    }
 	    throw new UnsupportedOperationException("Unsupported Tensor to Mat conversion for DataType " + tensor.dataType());
 	}
+	
+	/**
+	 * Convert a tensor to a list of Mats, one for each index along the batch (first) axis.
+	 * Note: Currently only 32-bit float tensors are supported.
+	 * @param tensor
+	 * @return
+	 */
+	public static List<Mat> convertToMats(Tensor tensor) {
+		if (tensor instanceof FloatNdArray)
+			return convertNdArrayToMats((FloatNdArray)tensor);
+		else
+			throw new UnsupportedOperationException("Tensor must be instance of FloatNdArray for conversion to Mat! Here tensor is " + tensor);
+	}
+	
+	/**
+	 * Convert an NdArray to a list of Mats, one for each index along the batch (first) axis.
+	 * @param tensor
+	 * @return
+	 */
+	public static List<Mat> convertNdArrayToMats(FloatNdArray tensor) {
+		
+		var list = new ArrayList<Mat>();
+		
+		var shape = tensor.shape();
+		
+		long[] sizes = shape.asArray();
+		Index[] inds = Stream.of(sizes).map(s -> Indices.all()).toArray(Index[]::new);
+		int nDim = sizes.length;
+		long n = sizes[0];
+		int h = nDim > 1 ? (int)sizes[1] : 1;
+		int w = nDim > 2 ? (int)sizes[2] : 1;
+		int channels = nDim > 3 ? (int)sizes[3] : 1;
+	    for (long i = 0; i < n; i++) {
+	    	
+	    	inds[0] = Indices.at(i);
+	    	var slice = tensor.slice(inds);
+	    	
+	    	var mat = new Mat(h, w, opencv_core.CV_32FC(channels));
+	    	FloatBuffer buffer = mat.createBuffer();
+	    	FloatDataBuffer dataBuffer = DataBuffers.of(buffer);
+	    	
+	    	slice.read(dataBuffer);
+	    	
+	    	list.add(mat);
+	    }
+		
+	    return list;
+	}
 
 	/**
 	 * Create an {@link ImageOp} to run a TensorFlow model with a single image input and output, 
@@ -252,7 +373,9 @@ public class TensorFlowTools {
 	 * @param outputName optional name of the node to use for output (may be null)
 	 * @return the {@link ImageOp}
 	 * @throws IllegalArgumentException if the model path is not a directory
+	 * @deprecated use {@link #createDnnModel(String)} instead, then ImageOps to build an op
 	 */
+	@Deprecated
 	public static ImageOp createOp(String modelPath, int tileWidth, int tileHeight, Padding padding, String outputName) throws IllegalArgumentException {
 		var file = new File(modelPath);
 		if (!file.isDirectory()) {
@@ -261,5 +384,32 @@ public class TensorFlowTools {
 		}
 		return new TensorFlowOp(modelPath, tileWidth, tileHeight, padding, outputName);
 	}
+	
+	
+	
+	
+	/**
+	 * Create a {@link DnnModel} for TensorFlow by reading a specified model file.
+	 * @param modelPath
+	 * @return
+	 * @throws IOException
+	 */
+	public static DnnModel<Tensor> createDnnModel(String modelPath) throws IOException {
+		try {
+			return createDnnModel(GeneralTools.toURI(modelPath));
+		} catch (URISyntaxException e) {
+			throw new IOException(e);
+		}
+	}
+	
+	/**
+	 * Create a {@link DnnModel} for TensorFlow by reading a specified URI.
+	 * @param uri
+	 * @return
+	 */
+	public static DnnModel<Tensor> createDnnModel(URI uri) {
+		return new TensorFlowDnnModel(uri);
+	}
+	
 
 }

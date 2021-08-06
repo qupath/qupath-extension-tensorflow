@@ -77,7 +77,8 @@ import qupath.lib.regions.Padding;
 import qupath.lib.regions.RegionRequest;
 import qupath.lib.roi.GeometryTools;
 import qupath.lib.roi.interfaces.ROI;
-import qupath.opencv.ml.DnnTools;
+import qupath.opencv.dnn.DnnModel;
+import qupath.opencv.dnn.DnnTools;
 import qupath.opencv.ops.ImageDataOp;
 import qupath.opencv.ops.ImageOp;
 import qupath.opencv.ops.ImageOps;
@@ -557,10 +558,9 @@ public class StarDist2D {
 				}
 				if (file.isFile()) {
 					try {
-						var dnn = DnnTools.builder(modelPath)
-								.build()
-								.buildFunction();
-						mlOp = ImageOps.ML.fun(dnn, tileWidth, tileHeight, padding);
+						DnnModel<?> dnn = DnnTools.builder(modelPath)
+								.build();
+						mlOp = ImageOps.ML.dnn(dnn, tileWidth, tileHeight, padding);
 						logger.debug("Loaded model {} with OpenCV DNN", modelPath);
 					} catch (Exception e) {
 						logger.error("Unable to load model file with OpenCV. If you intended to use TensorFlow, you need to have it on the classpath & provide the "
@@ -570,9 +570,14 @@ public class StarDist2D {
 					}
 				} else {
 					try {
+						// For backwards compatibility, we try to support TensorFlow if the extension is installed
 						var clsTF = Class.forName("qupath.tensorflow.TensorFlowTools");
-						var method = clsTF.getMethod("createOp", String.class, int.class, int.class, Padding.class);
-						mlOp = (ImageOp)method.invoke(null, modelPath, tileWidth, tileHeight, padding);
+						var method = clsTF.getMethod("createDnnModel", String.class);
+						var dnn = (DnnModel<?>)method.invoke(null, modelPath);
+						mlOp = ImageOps.ML.dnn(dnn, tileWidth, tileHeight, padding);
+//						var clsTF = Class.forName("qupath.tensorflow.TensorFlowTools");
+//						var method = clsTF.getMethod("createOp", String.class, int.class, int.class, Padding.class);
+//						mlOp = (ImageOp)method.invoke(null, modelPath, tileWidth, tileHeight, padding);
 						logger.debug("Loaded model {} with TensorFlow", modelPath);
 //						mlOp = TensorFlowTools.createOp(modelPath, tileWidth, tileHeight, padding);				
 					} catch (Exception e) {
