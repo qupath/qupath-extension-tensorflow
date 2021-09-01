@@ -37,7 +37,7 @@ description = 'QuPath extension to use TensorFlow'
 version = "0.3.0-rc2"
 
 dependencies {
-    def tensorflowVersion = "0.3.2"
+    def tensorflowVersion = "0.3.3"
     def cudaVersion = "11.0-8.0-1.5.4" // Warning! This doesn't match version with QuPath v0.3.0 + opencv-platform-gpu
     def qupathVersion = "0.3.0-rc2" // For now
     
