@@ -74,8 +74,8 @@ class TensorFlowBundle {
 			if (inputs == null || inputs.isEmpty()) {
 				logger.info("Found SignatureDef: {} (method={})", entry.getKey(), sigdef.getMethodName());
 				signatureDefKey = entry.getKey();
-				inputs = sigdef.getInputsMap().values().stream().map(t -> new SimpleTensorInfo(t)).collect(Collectors.toList());
-				outputs = sigdef.getOutputsMap().values().stream().map(t -> new SimpleTensorInfo(t)).collect(Collectors.toList());
+				inputs = sigdef.getInputsMap().entrySet().stream().map(e -> new SimpleTensorInfo(e.getKey(), e.getValue())).collect(Collectors.toList());
+				outputs = sigdef.getOutputsMap().entrySet().stream().map(e -> new SimpleTensorInfo(e.getKey(), e.getValue())).collect(Collectors.toList());
 			} else {
 				logger.warn("Extra SignatureDef found - will be ignored ({}, method={})", entry.getKey(), sigdef.getMethodName());
 			}
@@ -95,6 +95,7 @@ class TensorFlowBundle {
     private static Map<String, TensorFlowBundle> cachedBundles = new HashMap<>();
 
     static TensorFlowBundle loadBundle(String path) {
+    	cachedBundles.clear();
     	return cachedBundles.computeIfAbsent(path, p -> new TensorFlowBundle(p));
     }
 
@@ -198,9 +199,9 @@ class TensorFlowBundle {
 		private String name;
 		private long[] shape;
 
-		SimpleTensorInfo(TensorInfo info) {
+		SimpleTensorInfo(String name, TensorInfo info) {
 			this.info = info;
-			this.name = info.getName();
+			this.name = name;
 			if (info.hasTensorShape()) {
 				var dims = info.getTensorShape().getDimList();
 				shape = new long[dims.size()];
