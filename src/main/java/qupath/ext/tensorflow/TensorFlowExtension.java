@@ -24,6 +24,7 @@ package qupath.ext.tensorflow;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import qupath.lib.common.Version;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.extensions.GitHubProject;
 import qupath.lib.gui.extensions.QuPathExtension;
@@ -61,6 +62,10 @@ public class TensorFlowExtension implements QuPathExtension, GitHubProject {
 		return GitHubRepo.create(getName(), "qupath", "qupath-extension-tensorflow");
 	}
 	
+	@Override
+	public Version getQuPathVersion() {
+		return Version.parse("0.3.0-rc2");
+	}
 	
 	
 }
