@@ -34,12 +34,12 @@ ext.moduleName = 'qupath.extension.tensorflow'
 
 description = 'QuPath extension to use TensorFlow'
 
-version = "0.3.0-SNAPSHOT"
+version = "0.3.0"
 
 dependencies {
     def tensorflowVersion = "0.3.2"
     def cudaVersion = "11.0-8.0-1.5.4" // Warning! This doesn't match version with QuPath v0.3.0 + opencv-platform-gpu
-    def qupathVersion = "0.3.0-SNAPSHOT" // For now
+    def qupathVersion = "0.3.0" // For now
     
     def platform = project.findProperty("platform")
     
